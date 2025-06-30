@@ -125,7 +125,15 @@ async fn build_app(config: AppConfig) -> Result<Router> {
                 .layer(TraceLayer::new_for_http())
                 .layer(CorsLayer::permissive()), // TODO: Configure CORS properly for production
         )
-        .with_state(app_state);
+        .with_state(app_state.clone());
+
+    // Start the job processor
+    let mut job_processor = crate::infrastructure::JobProcessor::new(app_state.clone());
+    tokio::spawn(async move {
+        if let Err(e) = job_processor.start().await {
+            tracing::error!("Failed to start job processor: {}", e);
+        }
+    });
 
     Ok(app)
 }
