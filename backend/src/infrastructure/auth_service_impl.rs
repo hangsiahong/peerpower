@@ -40,8 +40,13 @@ impl AuthServiceImpl {
     }
 
     fn generate_otp(&self) -> String {
-        let mut rng = rand::thread_rng();
-        format!("{:06}", rng.gen_range(100000..999999))
+        // For development/testing, use a fixed OTP
+        if cfg!(debug_assertions) {
+            "123456".to_string()
+        } else {
+            let mut rng = rand::thread_rng();
+            format!("{:06}", rng.gen_range(100000..999999))
+        }
     }
 
     fn otp_key(&self, phone: &PhoneNumber) -> String {
