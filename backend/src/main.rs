@@ -5,11 +5,11 @@ mod presentation;
 mod shared;
 
 use axum::{
-    extract::{Request, State},
-    http::{HeaderValue, Method, StatusCode},
+    extract::State,
+    http::StatusCode,
     middleware,
     response::Json,
-    routing::{get, post},
+    routing::{get, post, put},
     Router,
 };
 use serde_json::{json, Value};
@@ -22,7 +22,7 @@ use tower_http::{
 };
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-use crate::presentation::handlers::auth_handlers;
+use crate::presentation::handlers::{auth_handlers, user_handlers};
 use crate::presentation::middleware::auth_middleware;
 
 use crate::config::AppConfig;
@@ -78,8 +78,12 @@ async fn build_app(config: AppConfig) -> Result<Router> {
 
     // Protected API routes (require authentication)
     let protected_routes = Router::new()
-        .route("/users/profile", get(user_profile_handler))
-        .route("/providers/register", post(provider_register_handler))
+        .route("/users/profile", get(user_handlers::get_user_profile))
+        .route("/users/profile", put(user_handlers::update_user_profile))
+        .route(
+            "/providers/register",
+            post(user_handlers::register_provider),
+        )
         .route("/messages/send", post(send_message_handler))
         .layer(middleware::from_fn_with_state(
             app_state.clone(),

@@ -47,10 +47,10 @@
 
 ### 2.2 DID Integration
 
-- [ ] DID generation/validation
-- [ ] Link DID to phone number
-- [ ] Optional EVM wallet binding
-- [ ] User profile management API
+- [x] DID generation/validation
+- [x] Link DID to phone number
+- [x] Optional EVM wallet binding
+- [x] User profile management API
 
 ---
 
