@@ -22,7 +22,9 @@ use tower_http::{
 };
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-use crate::presentation::handlers::{auth_handlers, message_handlers, user_handlers};
+use crate::presentation::handlers::{
+    auth_handlers, message_handlers, provider_handlers, user_handlers,
+};
 use crate::presentation::middleware::auth_middleware;
 
 use crate::config::AppConfig;
@@ -82,7 +84,20 @@ async fn build_app(config: AppConfig) -> Result<Router> {
         .route("/users/profile", put(user_handlers::update_user_profile))
         .route(
             "/providers/register",
-            post(user_handlers::register_provider),
+            post(provider_handlers::register_provider),
+        )
+        .route("/providers", get(provider_handlers::list_providers))
+        .route(
+            "/providers/:id",
+            get(provider_handlers::get_provider_status),
+        )
+        .route(
+            "/providers/:id/heartbeat",
+            post(provider_handlers::provider_heartbeat),
+        )
+        .route(
+            "/providers/:id/status",
+            put(provider_handlers::update_provider_status),
         )
         .route("/messages/send", post(message_handlers::send_message))
         .route("/messages/:id", get(message_handlers::get_message_status))

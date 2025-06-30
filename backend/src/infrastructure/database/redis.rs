@@ -198,4 +198,49 @@ impl RedisConnection {
 
         Ok(result)
     }
+
+    pub async fn sadd(&self, key: &str, value: &str) -> Result<i64> {
+        let mut conn = self.connection.lock().await;
+
+        let result: i64 = redis::cmd("SADD")
+            .arg(key)
+            .arg(value)
+            .query(&mut *conn)
+            .map_err(|e| PeerPowerError::ExternalService {
+                service: "Redis".to_string(),
+                message: format!("Redis SADD failed: {}", e),
+            })?;
+
+        Ok(result)
+    }
+
+    pub async fn srem(&self, key: &str, value: &str) -> Result<i64> {
+        let mut conn = self.connection.lock().await;
+
+        let result: i64 = redis::cmd("SREM")
+            .arg(key)
+            .arg(value)
+            .query(&mut *conn)
+            .map_err(|e| PeerPowerError::ExternalService {
+                service: "Redis".to_string(),
+                message: format!("Redis SREM failed: {}", e),
+            })?;
+
+        Ok(result)
+    }
+
+    pub async fn smembers(&self, key: &str) -> Result<Vec<String>> {
+        let mut conn = self.connection.lock().await;
+
+        let result: Vec<String> =
+            redis::cmd("SMEMBERS")
+                .arg(key)
+                .query(&mut *conn)
+                .map_err(|e| PeerPowerError::ExternalService {
+                    service: "Redis".to_string(),
+                    message: format!("Redis SMEMBERS failed: {}", e),
+                })?;
+
+        Ok(result)
+    }
 }
