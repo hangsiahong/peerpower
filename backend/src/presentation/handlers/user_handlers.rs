@@ -95,15 +95,11 @@ pub async fn get_user_profile(
 ) -> Result<Json<UserProfileResponse>> {
     info!("Getting profile for user: {}", user_id);
 
-    // Get user from database
+    // Get user from repository
     let user = app_state
-        .database
-        .collection::<User>("users")
-        .find_one(mongodb::bson::doc! {"user_id": &user_id}, None)
-        .await
-        .map_err(|e| PeerPowerError::Database {
-            message: format!("Failed to fetch user: {}", e),
-        })?
+        .user_repository
+        .find_by_id(&user_id)
+        .await?
         .ok_or_else(|| PeerPowerError::NotFound {
             resource: format!("User with ID: {}", user_id),
         })?;
@@ -122,14 +118,21 @@ pub async fn update_user_profile(
 
     info!("Updating profile for user: {}", user_id);
 
-    // Build update document
-    let mut update_doc = mongodb::bson::Document::new();
+    // Get existing user
+    let mut user = app_state
+        .user_repository
+        .find_by_id(&user_id)
+        .await?
+        .ok_or_else(|| PeerPowerError::NotFound {
+            resource: format!("User with ID: {}", user_id),
+        })?;
 
-    if let Some(did) = &update_request.did {
-        update_doc.insert("did", did);
+    // Update fields
+    if let Some(did) = update_request.did {
+        user.did = Some(did);
     }
 
-    if let Some(evm_address) = &update_request.evm_address {
+    if let Some(evm_address) = update_request.evm_address {
         // Validate EVM address format (basic check)
         if !evm_address.starts_with("0x") || evm_address.len() != 42 {
             return Err(PeerPowerError::ValidationError {
@@ -137,43 +140,17 @@ pub async fn update_user_profile(
                 message: "Invalid EVM address format".to_string(),
             });
         }
-        update_doc.insert("evm_address", evm_address);
+        user.evm_address = Some(evm_address);
     }
 
-    update_doc.insert("updated_at", chrono::Utc::now());
+    // Update timestamp
+    user.updated_at = chrono::Utc::now();
 
-    // Update user in database
-    let collection = app_state.database.collection::<User>("users");
-    let result = collection
-        .update_one(
-            mongodb::bson::doc! {"user_id": &user_id},
-            mongodb::bson::doc! {"$set": update_doc},
-            None,
-        )
-        .await
-        .map_err(|e| PeerPowerError::Database {
-            message: format!("Failed to update user: {}", e),
-        })?;
-
-    if result.matched_count == 0 {
-        return Err(PeerPowerError::NotFound {
-            resource: format!("User with ID: {}", user_id),
-        });
-    }
-
-    // Fetch updated user
-    let updated_user = collection
-        .find_one(mongodb::bson::doc! {"user_id": &user_id}, None)
-        .await
-        .map_err(|e| PeerPowerError::Database {
-            message: format!("Failed to fetch updated user: {}", e),
-        })?
-        .ok_or_else(|| PeerPowerError::NotFound {
-            resource: format!("User with ID: {}", user_id),
-        })?;
+    // Save updated user
+    app_state.user_repository.update(&user).await?;
 
     info!("Successfully updated profile for user: {}", user_id);
-    Ok(Json(UserProfileResponse::from(&updated_user)))
+    Ok(Json(UserProfileResponse::from(&user)))
 }
 
 /// Register as a provider (protected route)
@@ -218,7 +195,7 @@ pub async fn register_provider(
 
     let result = collection
         .update_one(
-            mongodb::bson::doc! {"user_id": &user_id},
+            mongodb::bson::doc! {"id": &user_id},
             mongodb::bson::doc! {"$set": update_doc},
             None,
         )

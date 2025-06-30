@@ -3,6 +3,7 @@ use axum::{
     response::Json,
     Json as JsonExtractor,
 };
+use chrono::{DateTime, Utc};
 use futures::stream::TryStreamExt;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -10,7 +11,6 @@ use tracing::info;
 use validator::Validate;
 
 use crate::domain::entities::provider::{Location, Provider};
-use crate::domain::entities::user::User;
 use crate::presentation::handlers::message_handlers::AuthenticatedUser;
 use crate::shared::types::{Carrier, PhoneNumber, ProviderStatus};
 use crate::shared::{AppState, PeerPowerError, Result};
@@ -79,13 +79,10 @@ pub async fn register_provider(
     let carrier = Carrier::from_phone_number(&phone);
 
     // Check if user exists and is verified
-    let users_collection = app_state.database.collection::<User>("users");
-    let user = users_collection
-        .find_one(mongodb::bson::doc! {"id": &user_id}, None)
-        .await
-        .map_err(|e| PeerPowerError::Database {
-            message: format!("Failed to fetch user: {}", e),
-        })?
+    let user = app_state
+        .user_repository
+        .find_by_id(&user_id)
+        .await?
         .ok_or_else(|| PeerPowerError::NotFound {
             resource: format!("User with ID: {}", user_id),
         })?;
@@ -228,10 +225,12 @@ pub async fn list_providers(
     Query(params): Query<ProviderListQuery>,
     AuthenticatedUser(user_id): AuthenticatedUser,
 ) -> Result<Json<Vec<ProviderStatusResponse>>> {
-    let providers_collection = app_state.database.collection::<Provider>("providers");
+    use mongodb::bson::{doc, Document};
+
+    let providers_collection = app_state.database.collection::<Document>("providers");
 
     // Build query filter
-    let mut filter = mongodb::bson::doc! {"user_id": &user_id};
+    let mut filter = doc! {"user_id": &user_id};
     if let Some(status) = params.status {
         filter.insert("status", status);
     }
@@ -249,27 +248,50 @@ pub async fn list_providers(
             })?;
 
     let mut providers = Vec::new();
-    while let Some(provider) = cursor
+    while let Some(doc) = cursor
         .try_next()
         .await
         .map_err(|e| PeerPowerError::Database {
             message: format!("Failed to iterate providers: {}", e),
         })?
     {
+        // Extract fields from the document
+        let provider_id = doc.get_str("provider_id").unwrap_or("").to_string();
+        let user_id = doc.get_str("user_id").unwrap_or("").to_string();
+        let phone = doc.get_str("phone").unwrap_or("").to_string();
+        let carrier = doc.get_str("carrier").unwrap_or("Unknown").to_string();
+        let status = doc.get_str("status").unwrap_or("offline").to_string();
+
+        // Handle datetime fields safely
+        let created_at = doc
+            .get_datetime("created_at")
+            .map(|dt| DateTime::<Utc>::from(*dt).to_rfc3339())
+            .unwrap_or_else(|_| Utc::now().to_rfc3339());
+
+        let updated_at = doc
+            .get_datetime("updated_at")
+            .map(|dt| DateTime::<Utc>::from(*dt).to_rfc3339())
+            .unwrap_or_else(|_| Utc::now().to_rfc3339());
+
+        let last_heartbeat = doc
+            .get_datetime("last_heartbeat")
+            .map(|dt| DateTime::<Utc>::from(*dt).to_rfc3339())
+            .ok();
+
         // For now, use placeholder values for message count and success rate
         // TODO: Calculate actual values from message history
         providers.push(ProviderStatusResponse {
-            provider_id: provider.id,
-            user_id: provider.user_id,
-            phone: provider.phone.as_str().to_string(),
-            carrier: format!("{:?}", provider.carrier),
-            status: format!("{:?}", provider.status).to_lowercase(),
-            location: provider.location,
-            last_heartbeat: provider.last_heartbeat.map(|dt| dt.to_rfc3339()),
+            provider_id,
+            user_id,
+            phone,
+            carrier,
+            status,
+            location: None, // TODO: Handle location properly
+            last_heartbeat,
             message_count_today: 0, // TODO: Calculate actual count
             success_rate: 95.0,     // TODO: Calculate actual success rate
-            created_at: provider.created_at.to_rfc3339(),
-            updated_at: provider.updated_at.to_rfc3339(),
+            created_at,
+            updated_at,
         });
     }
 

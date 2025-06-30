@@ -210,22 +210,50 @@ impl AuthService for AuthServiceImpl {
         self.delete_otp(phone).await?;
 
         // Find or create user
+        info!("Looking up user by phone: {}", phone.as_str());
         let user = match self.user_repo.find_by_phone(phone).await? {
             Some(user) => {
+                info!("Found existing user: {}", user.id);
                 // Update user verification status
                 let mut updated_user = user;
                 if !updated_user.is_verified {
                     updated_user.verify();
                     self.user_repo.update(&updated_user).await?;
+                    info!("Updated user verification status for: {}", updated_user.id);
                 }
                 updated_user
             }
             None => {
+                info!("User not found, creating new user");
                 // Create new user
                 let mut new_user = User::new(phone.clone());
                 new_user.verify();
-                self.user_repo.create(&new_user).await?;
-                new_user
+                info!("Created new user object with ID: {}", new_user.id);
+
+                match self.user_repo.create(&new_user).await {
+                    Ok(()) => {
+                        info!("Successfully saved user to database: {}", new_user.id);
+                    }
+                    Err(e) => {
+                        warn!("Failed to save user to database: {:?}", e);
+                        return Err(e);
+                    }
+                }
+
+                // Fetch the newly created user from the database to ensure we have the complete object
+                info!("Fetching newly created user from database");
+                match self.user_repo.find_by_phone(phone).await? {
+                    Some(user) => {
+                        info!("Successfully retrieved newly created user: {}", user.id);
+                        user
+                    }
+                    None => {
+                        warn!("Failed to retrieve newly created user from database");
+                        return Err(PeerPowerError::Internal {
+                            message: "Failed to retrieve newly created user".to_string(),
+                        });
+                    }
+                }
             }
         };
 

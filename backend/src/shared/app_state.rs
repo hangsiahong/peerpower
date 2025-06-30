@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use crate::config::AppConfig;
+use crate::domain::repositories::UserRepository;
 use crate::domain::services::AuthService;
 use crate::infrastructure::auth_service_impl::AuthServiceImpl;
 use crate::infrastructure::database::user_repository::MongoUserRepository;
@@ -13,32 +14,37 @@ pub struct AppState {
     pub database: crate::infrastructure::database::MongoDatabase,
     pub redis: crate::infrastructure::database::RedisConnection,
     pub auth_service: Arc<dyn AuthService>,
+    pub user_repository: Arc<dyn UserRepository>,
 }
 
 impl AppState {
     pub async fn new(config: AppConfig) -> Result<Self> {
         // Initialize database connections
-        let database = crate::infrastructure::database::MongoDatabase::new(&config.database).await?;
+        let database =
+            crate::infrastructure::database::MongoDatabase::new(&config.database).await?;
         let redis = crate::infrastructure::database::RedisConnection::new(&config.redis).await?;
 
         // Create database indexes
         database.create_indexes().await?;
 
         // Create repositories
-        let user_repo = Arc::new(MongoUserRepository::new(Arc::new(database.database().clone())));
+        let user_repo = Arc::new(MongoUserRepository::new(Arc::new(
+            database.database().clone(),
+        )));
 
         // Create auth service
         let auth_service: Arc<dyn AuthService> = Arc::new(AuthServiceImpl::new(
             config.auth.clone(),
             Arc::new(redis.clone()),
-            user_repo,
+            user_repo.clone(),
         ));
 
-        Ok(Self { 
+        Ok(Self {
             config,
             database,
             redis,
             auth_service,
+            user_repository: user_repo,
         })
     }
 }

@@ -46,7 +46,7 @@ impl TryFrom<UserDocument> for User {
 
     fn try_from(doc: UserDocument) -> Result<Self> {
         let phone = PhoneNumber::new(doc.phone)?;
-        
+
         Ok(User {
             id: doc.user_id,
             phone,
@@ -77,27 +77,36 @@ impl MongoUserRepository {
 impl UserRepository for MongoUserRepository {
     async fn create(&self, user: &User) -> Result<()> {
         let doc = UserDocument::from(user);
-        
-        self.collection
-            .insert_one(doc, None)
-            .await
-            .map_err(|e| {
-                if e.to_string().contains("duplicate key") {
-                    PeerPowerError::ValidationError {
-                        field: "phone".to_string(),
-                        message: "Phone number already exists".to_string(),
-                    }
-                } else {
-                    PeerPowerError::Database {
-                        message: format!("Failed to create user: {}", e),
-                    }
-                }
-            })?;
 
+        tracing::info!(
+            "Creating user in database with user_id: {} and phone: {}",
+            doc.user_id,
+            doc.phone
+        );
+
+        let result = self.collection.insert_one(doc, None).await.map_err(|e| {
+            tracing::error!("Database insert error: {}", e);
+            if e.to_string().contains("duplicate key") {
+                PeerPowerError::ValidationError {
+                    field: "phone".to_string(),
+                    message: "Phone number already exists".to_string(),
+                }
+            } else {
+                PeerPowerError::Database {
+                    message: format!("Failed to create user: {}", e),
+                }
+            }
+        })?;
+
+        tracing::info!(
+            "User created successfully with MongoDB _id: {:?}",
+            result.inserted_id
+        );
         Ok(())
     }
 
     async fn find_by_id(&self, id: &str) -> Result<Option<User>> {
+        tracing::info!("Looking up user by ID: {}", id);
         let doc = self
             .collection
             .find_one(doc! {"user_id": id}, None)
@@ -107,12 +116,19 @@ impl UserRepository for MongoUserRepository {
             })?;
 
         match doc {
-            Some(user_doc) => Ok(Some(user_doc.try_into()?)),
-            None => Ok(None),
+            Some(user_doc) => {
+                tracing::info!("Found user by ID: {}", id);
+                Ok(Some(user_doc.try_into()?))
+            }
+            None => {
+                tracing::info!("User not found by ID: {}", id);
+                Ok(None)
+            }
         }
     }
 
     async fn find_by_phone(&self, phone: &PhoneNumber) -> Result<Option<User>> {
+        tracing::info!("Looking up user by phone: {}", phone.as_str());
         let doc = self
             .collection
             .find_one(doc! {"phone": phone.as_str()}, None)
@@ -122,8 +138,18 @@ impl UserRepository for MongoUserRepository {
             })?;
 
         match doc {
-            Some(user_doc) => Ok(Some(user_doc.try_into()?)),
-            None => Ok(None),
+            Some(user_doc) => {
+                tracing::info!(
+                    "Found user by phone: {} with user_id: {}",
+                    phone.as_str(),
+                    user_doc.user_id
+                );
+                Ok(Some(user_doc.try_into()?))
+            }
+            None => {
+                tracing::info!("User not found by phone: {}", phone.as_str());
+                Ok(None)
+            }
         }
     }
 
@@ -144,7 +170,7 @@ impl UserRepository for MongoUserRepository {
 
     async fn update(&self, user: &User) -> Result<()> {
         let doc = UserDocument::from(user);
-        
+
         let update_doc = doc! {
             "$set": {
                 "did": &doc.did,
