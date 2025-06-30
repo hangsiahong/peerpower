@@ -1,0 +1,182 @@
+---
+## 🔧 System Overview: PeerPower (Decentralized SMS Gateway)
+
+### 🎯 Goals
+
+- Create a decentralized network of SMS senders using Android phones (users as providers).
+- Match OTP requests to the correct SIM carrier (Smart → Smart, Metfone → Metfone).
+- Incentivize people (like tuk-tuk drivers) to keep their app online and provide service.
+- Ensure high delivery reliability and proof-of-delivery for senders (e.g., businesses).
+- Enable easy, secure payments using local banks via **Baray**.
+- Manage rewards using **PPT (PeerPower Token)** on the **Selendra Network**.
+---
+
+## 📱 Mobile App (React Native Android)
+
+### 🧩 Core Features
+
+- **DID-based login** (decentralized identity).
+- Optionally bind **public EVM address** to DID (to receive PPT rewards).
+- SIM detection and registration (detect which carrier is available).
+- Foreground and background service (for handling and sending SMS).
+- Proof-of-delivery reporting (via delivery reports or receipts).
+- Battery optimization (foreground service, job scheduler, wake locks).
+- Status reporting (heartbeat to backend every X minutes).
+- Token wallet integration (optional or future feature).
+
+### 🔐 Permissions Required
+
+- `SEND_SMS`
+- `RECEIVE_SMS`
+- `READ_PHONE_STATE`
+- Background/foreground service permission
+- Possibly make app default SMS app (optional but ideal)
+
+---
+
+## 🧠 Architecture Design
+
+### 🧩 Backend (Rust + MongoDB)
+
+#### Core Services:
+
+1. **Provider Registry Service**
+
+   - Stores all available providers, SIM types (Smart, Metfone, Cellcard), health/status.
+
+2. **Message Dispatcher**
+
+   - Accepts OTP requests (via REST/JSON-RPC).
+   - Finds optimal provider based on carrier.
+   - Queues and assigns message with retry/fallback.
+
+3. **Proof-of-Delivery Service**
+
+   - Receives status updates from mobile app.
+   - Validates successful SMS delivery.
+
+4. **Incentive Engine**
+
+   - Calculates and distributes rewards:
+
+     - 📦 **PPT tokens** (ERC20 on Selendra)
+     - 📲 Airtime top-up (optional)
+     - 💸 Cash payouts via Baray (optional)
+
+5. **Baray Payment Integration**
+
+   - Allows clients to buy PPT tokens using ABA, Wing, Acleda, etc.
+   - Listens for Baray webhooks to confirm payments.
+   - Mints PPT to client wallet upon payment confirmation.
+   - Handles receipts, audit logs, and token issuance.
+
+6. **Audit & Anti-abuse**
+
+   - Prevents fake proof reports.
+   - Limits send frequency and provider abuse.
+   - Tracks delivery success rate and blacklists bad actors.
+
+---
+
+## 🔄 Message Flow
+
+```
+[Client sends OTP request]
+→ Backend Dispatcher finds matching provider (e.g., Smart)
+→ Sends job via Firebase Cloud Messaging (FCM)
+→ Android provider app wakes up and sends SMS
+→ App reports success via Proof-of-Delivery service
+→ Backend issues reward in PPT (or other incentive)
+```
+
+---
+
+## ⚡ Battery & Background Optimization (Android Tips)
+
+- Foreground service with persistent notification.
+- Avoid wakelocks unless absolutely necessary.
+- Use `JobScheduler`, `WorkManager` for non-critical tasks.
+- Use `setExactAndAllowWhileIdle` for time-sensitive dispatches.
+- Store unsent jobs locally (SQLite/MMKV).
+- FCM used to wake device only when needed.
+
+---
+
+## 🛡️ Proof-of-Delivery Mechanism
+
+- Use `SmsManager`'s delivery reports.
+- Include hidden token/message ID in SMS for traceability.
+- Optional: Confirm from receiving user (if allowed).
+
+---
+
+## 🔗 Payment and Tokenization
+
+### ✅ Baray Integration
+
+- Khmer-friendly Stripe-like API.
+- Accepts payments via ABA, Wing, Acleda, etc.
+- On success:
+
+  - Emits event via webhook.
+  - Backend mints/sends **PPT (PeerPower Token)** to user wallet.
+
+### ✅ PPT Token (ERC20 on Selendra)
+
+- Token is used to:
+
+  - Pay for SMS services.
+  - Reward providers.
+  - Facilitate DAO/governance later.
+
+- Optional: Let users stake, swap, or cash out via DEX.
+
+---
+
+## 📶 P2P Network Design (Future)
+
+- Coordinator model for now (central dispatch logic).
+- In future, explore:
+
+  - libp2p or gossip for peer discovery.
+  - Local job propagation.
+  - Zero-trust reward proofs.
+
+---
+
+## 💰 Incentive Design Ideas
+
+| Type                    | Description                             |
+| ----------------------- | --------------------------------------- |
+| **Airtime Top-up**      | Convert PPT to phone credits            |
+| **Cashout (via Baray)** | Users can withdraw earnings to ABA/Wing |
+| **Leaderboard Bonuses** | Monthly rewards for best senders        |
+| **Priority Queueing**   | High score = faster job assignment      |
+
+---
+
+## 🧪 Additional Features
+
+- SIM detection via IMSI or operator code.
+- Geo-aware provider matching (optional).
+- User-defined limits (e.g., max SMS/day).
+- End-to-end message/job signature encryption.
+- Web/Telegram dashboard for monitoring + admin.
+
+---
+
+## 🧰 Tech Stack Summary
+
+| Component        | Technology                                        |
+| ---------------- | ------------------------------------------------- | ----------------------------- |
+| Mobile App       | React Native (Android-only), Native Modules (SMS) |
+| Authentication   | Phone number login                                | option to generate evm wallet |
+| Backend API      | Rust (Actix or Axum), MongoDB                     |
+| Queue            | Redis or RabbitMQ (optional)                      |
+| Notifications    | Firebase Cloud Messaging (job pushing)            |
+| Payments         | **Baray** (ABA, Wing, Acleda, etc.)               |
+| Token            | **PPT (ERC20)** on Selendra Network               |
+| Delivery Logging | Custom + Prometheus/Grafana                       |
+| Token Wallet     | Optional or DID-bound                             |
+
+---

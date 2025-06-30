@@ -1,0 +1,127 @@
+🔧 System Overview: PeerPower (Decentralized SMS Gateway)
+🎯 Goals
+Create a decentralized network of SMS senders using Android phones (users as providers).
+
+Match OTP requests to the correct SIM carrier (Smart → Smart, Metfone → Metfone).
+
+Incentivize people (like tuk-tuk drivers) to keep their app online and provide service.
+
+Ensure high delivery reliability and proof-of-delivery for senders (e.g., businesses).
+
+📱 Mobile App (React Native Android)
+🧩 Core Features:
+Login/Register (with phone number) -> Future we will introduce PPT Token(Erc20), and user can choose to put the public address wallet, so the reward will send to that wallet
+
+SIM detection and registration (detect which carrier is available)
+
+Foreground and background service (for handling and sending SMS)
+
+Proof-of-delivery reporting (via delivery reports or receipts)
+
+Battery optimization (foreground service, job scheduler, wake locks)
+
+Status reporting (heartbeat to backend every X minutes)
+
+🔐 Permissions Required:
+SEND_SMS
+
+RECEIVE_SMS
+
+READ_PHONE_STATE
+
+Background service / foreground service notification
+
+Possibly make app default SMS app (optional but ideal)
+
+🧠 Architecture Design
+🧩 Backend (Rust + MongoDB)
+Core Services:
+Provider Registry Service
+
+Stores all available providers and their carrier types (Smart, Metfone, Cellcard)
+
+Tracks provider health/status (online/offline, success rate)
+
+Message Dispatcher
+
+Accepts OTP send requests via REST/JSON-RPC
+
+Finds optimal provider (Smart → Smart, etc.)
+
+Queues and assigns message with retry/fallback strategy
+
+Proof-of-Delivery Service
+
+Validates delivery report (sent back from mobile app)
+
+Issues reward (e.g., points or money)
+
+Incentive Engine
+
+Calculates and distributes rewards (real money, tokens, airtime top-up)
+
+Dynamic pricing: rare providers earn more
+
+Audit/Anti-abuse System
+
+Prevents abuse, spoofing, repeated failures, fake reports
+
+🔄 Message Flow
+
+[Client wants to send OTP] → Backend Dispatcher →
+→ Find Metfone provider →
+→ Push job to Android app →
+→ Android app sends SMS →
+→ App confirms sent/delivered →
+→ Backend confirms →
+→ Provider gets rewarded
+⚡ Battery & Background Optimization (Android Tips)
+Use foreground service with persistent notification
+
+Avoid wakelocks unless necessary; use JobScheduler or WorkManager
+
+Tune sync intervals (e.g., every 5–10 mins)
+
+Use local database (e.g., SQLite or MMKV) for queuing jobs
+
+Respect Doze Mode (use setExactAndAllowWhileIdle if needed)
+
+🛡️ Proof of Delivery Mechanism
+Use SMS sent and delivery status (via SmsManager)
+
+Include unique tracking code in message (e.g., hidden token or ID)
+
+Optional: Have recipient reply automatically to confirm (if it's allowed)
+
+📶 Network Design: P2P Distribution
+Central backend dispatches but behaves like a coordinator
+
+Add regional priority routing: Smart → Smart, and fallback only if needed
+
+Future: Use libp2p or gossip protocol for more decentralization
+
+💰 Incentive Design Ideas
+Type of Incentive How it works
+Airtime Top-up Automatically top-up phone credits
+Cashout (Wing/Pi Pay) Accumulate $ then cash out
+Leaderboard Bonuses Monthly bonuses for top senders
+Priority Queueing Higher score → higher dispatch chance
+
+🧪 Additional Ideas
+Carrier SIM detection using IMSI or operator code
+
+Geo-aware matching (optional): match provider near target
+
+Allow providers to limit usage (e.g., “only send max 50/day”)
+
+Encrypted job queueing with signatures to prevent tampering
+
+Telegram or Web UI dashboard for monitoring
+
+🔧 Tech Stack Summary
+Component Tech
+Mobile App React Native (Android-only), Native modules for SMS
+Backend API Rust (Actix/Axum), MongoDB
+Queue Redis or RabbitMQ (optional)
+Notifications Firebase Cloud Messaging (for job pushing)
+Analytics Prometheus + Grafana or custom dashboards
