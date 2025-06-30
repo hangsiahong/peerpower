@@ -16,8 +16,8 @@ impl RedisConnection {
     pub async fn new(config: &RedisConfig) -> Result<Self> {
         info!("Connecting to Redis at {}", config.url);
 
-        let client = Client::open(config.url.as_str())
-            .map_err(|e| PeerPowerError::ExternalService {
+        let client =
+            Client::open(config.url.as_str()).map_err(|e| PeerPowerError::ExternalService {
                 service: "Redis".to_string(),
                 message: format!("Failed to create Redis client: {}", e),
             })?;
@@ -31,12 +31,12 @@ impl RedisConnection {
 
         // Test connection
         let mut conn = connection;
-        redis::cmd("PING")
-            .query::<String>(&mut conn)
-            .map_err(|e| PeerPowerError::ExternalService {
+        redis::cmd("PING").query::<String>(&mut conn).map_err(|e| {
+            PeerPowerError::ExternalService {
                 service: "Redis".to_string(),
                 message: format!("Redis ping failed: {}", e),
-            })?;
+            }
+        })?;
 
         info!("Successfully connected to Redis");
 
@@ -57,9 +57,14 @@ impl RedisConnection {
         Ok(())
     }
 
-    pub async fn set(&self, key: &str, value: &str, expiration_seconds: Option<usize>) -> Result<()> {
+    pub async fn set(
+        &self,
+        key: &str,
+        value: &str,
+        expiration_seconds: Option<usize>,
+    ) -> Result<()> {
         let mut conn = self.connection.lock().await;
-        
+
         if let Some(exp) = expiration_seconds {
             redis::cmd("SETEX")
                 .arg(key)
@@ -80,55 +85,52 @@ impl RedisConnection {
                     message: format!("Redis SET failed: {}", e),
                 })?;
         }
-        
+
         Ok(())
     }
 
     pub async fn get(&self, key: &str) -> Result<Option<String>> {
         let mut conn = self.connection.lock().await;
-        
-        let result: Option<String> = redis::cmd("GET")
-            .arg(key)
-            .query(&mut *conn)
-            .map_err(|e| PeerPowerError::ExternalService {
+
+        let result: Option<String> = redis::cmd("GET").arg(key).query(&mut *conn).map_err(|e| {
+            PeerPowerError::ExternalService {
                 service: "Redis".to_string(),
                 message: format!("Redis GET failed: {}", e),
-            })?;
-            
+            }
+        })?;
+
         Ok(result)
     }
 
     pub async fn delete(&self, key: &str) -> Result<bool> {
         let mut conn = self.connection.lock().await;
-        
-        let result: i32 = redis::cmd("DEL")
-            .arg(key)
-            .query(&mut *conn)
-            .map_err(|e| PeerPowerError::ExternalService {
+
+        let result: i32 = redis::cmd("DEL").arg(key).query(&mut *conn).map_err(|e| {
+            PeerPowerError::ExternalService {
                 service: "Redis".to_string(),
                 message: format!("Redis DEL failed: {}", e),
-            })?;
-            
+            }
+        })?;
+
         Ok(result > 0)
     }
 
     pub async fn increment(&self, key: &str) -> Result<i64> {
         let mut conn = self.connection.lock().await;
-        
-        let result: i64 = redis::cmd("INCR")
-            .arg(key)
-            .query(&mut *conn)
-            .map_err(|e| PeerPowerError::ExternalService {
+
+        let result: i64 = redis::cmd("INCR").arg(key).query(&mut *conn).map_err(|e| {
+            PeerPowerError::ExternalService {
                 service: "Redis".to_string(),
                 message: format!("Redis INCR failed: {}", e),
-            })?;
-            
+            }
+        })?;
+
         Ok(result)
     }
 
     pub async fn acquire_lock(&self, key: &str, ttl_seconds: usize) -> Result<bool> {
         let mut conn = self.connection.lock().await;
-        
+
         let result: Option<String> = redis::cmd("SET")
             .arg(key)
             .arg("locked")
@@ -140,12 +142,60 @@ impl RedisConnection {
                 service: "Redis".to_string(),
                 message: format!("Redis lock acquisition failed: {}", e),
             })?;
-            
+
         Ok(result.is_some())
     }
 
     pub async fn release_lock(&self, key: &str) -> Result<()> {
         self.delete(key).await?;
         Ok(())
+    }
+
+    pub async fn lpush(&self, key: &str, value: &str) -> Result<i64> {
+        let mut conn = self.connection.lock().await;
+
+        let result: i64 = redis::cmd("LPUSH")
+            .arg(key)
+            .arg(value)
+            .query(&mut *conn)
+            .map_err(|e| PeerPowerError::ExternalService {
+                service: "Redis".to_string(),
+                message: format!("Redis LPUSH failed: {}", e),
+            })?;
+
+        Ok(result)
+    }
+
+    pub async fn rpop(&self, key: &str) -> Result<Option<String>> {
+        let mut conn = self.connection.lock().await;
+
+        let result: Option<String> =
+            redis::cmd("RPOP").arg(key).query(&mut *conn).map_err(|e| {
+                PeerPowerError::ExternalService {
+                    service: "Redis".to_string(),
+                    message: format!("Redis RPOP failed: {}", e),
+                }
+            })?;
+
+        Ok(result)
+    }
+
+    pub async fn brpop(&self, keys: &[&str], timeout: usize) -> Result<Option<(String, String)>> {
+        let mut conn = self.connection.lock().await;
+
+        let mut cmd = redis::cmd("BRPOP");
+        for key in keys {
+            cmd.arg(*key);
+        }
+        cmd.arg(timeout as u64);
+
+        let result: Option<(String, String)> =
+            cmd.query(&mut *conn)
+                .map_err(|e| PeerPowerError::ExternalService {
+                    service: "Redis".to_string(),
+                    message: format!("Redis BRPOP failed: {}", e),
+                })?;
+
+        Ok(result)
     }
 }

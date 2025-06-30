@@ -22,7 +22,7 @@ use tower_http::{
 };
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-use crate::presentation::handlers::{auth_handlers, user_handlers};
+use crate::presentation::handlers::{auth_handlers, message_handlers, user_handlers};
 use crate::presentation::middleware::auth_middleware;
 
 use crate::config::AppConfig;
@@ -84,7 +84,9 @@ async fn build_app(config: AppConfig) -> Result<Router> {
             "/providers/register",
             post(user_handlers::register_provider),
         )
-        .route("/messages/send", post(send_message_handler))
+        .route("/messages/send", post(message_handlers::send_message))
+        .route("/messages/:id", get(message_handlers::get_message_status))
+        .route("/messages", get(message_handlers::list_messages))
         .layer(middleware::from_fn_with_state(
             app_state.clone(),
             auth_middleware::auth_middleware::<axum::body::Body>,
