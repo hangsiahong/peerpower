@@ -1,1 +1,2 @@
-// Messaging implementations will be defined here
+// Messaging implementations
+pub mod fcm_service;

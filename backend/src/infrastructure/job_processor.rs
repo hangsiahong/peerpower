@@ -1,10 +1,10 @@
-use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::{interval, sleep};
 use tracing::{error, info, warn};
 
 use crate::domain::entities::{Job, Message, Provider};
+use crate::infrastructure::messaging::fcm_service::FcmService;
 use crate::shared::types::{MessageStatus, ProviderStatus};
 use crate::shared::{AppState, PeerPowerError, Result};
 
@@ -12,15 +12,6 @@ use crate::shared::{AppState, PeerPowerError, Result};
 pub struct JobProcessor {
     app_state: Arc<AppState>,
     is_running: bool,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct FCMJobPayload {
-    pub job_id: String,
-    pub message_id: String,
-    pub recipient: String,
-    pub content: String,
-    pub priority: String,
 }
 
 impl JobProcessor {
@@ -240,28 +231,33 @@ impl JobProcessor {
                     message: "Provider has no FCM token".to_string(),
                 })?;
 
-        let payload = FCMJobPayload {
-            job_id: job.id.clone(),
-            message_id: message.id.clone(),
-            recipient: message.recipient.as_str().to_string(),
-            content: message.content.clone(),
-            priority: format!("{:?}", message.priority),
-        };
-
-        // TODO: Implement actual FCM sending
-        // For now, we'll simulate FCM sending
         info!(
-            "Sending FCM to token: {} with payload: {:?}",
-            fcm_token, payload
+            "Sending FCM dispatch request to provider {} for message {}",
+            provider.id, message.id
         );
 
-        // Simulate network delay
-        sleep(Duration::from_millis(100)).await;
+        // Send SMS dispatch request via FCM
+        let result = app_state
+            .fcm_service
+            .send_sms_dispatch_request(
+                fcm_token,
+                &message.id,
+                message.recipient.as_str(),
+                &message.content,
+                &format!("{:?}", message.priority),
+            )
+            .await;
 
-        // TODO: Replace with actual FCM client
-        // let fcm_client = app_state.fcm_client.send_message(fcm_token, payload).await?;
-
-        Ok(())
+        match result {
+            Ok(response) => {
+                info!("FCM dispatch request sent successfully: {}", response);
+                Ok(())
+            }
+            Err(e) => {
+                error!("Failed to send FCM dispatch request: {}", e);
+                Err(e)
+            }
+        }
     }
 
     /// Re-queue a job for retry

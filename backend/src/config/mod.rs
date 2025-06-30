@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use crate::shared::PeerPowerError;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
@@ -51,7 +51,8 @@ pub struct ExternalServicesConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FcmConfig {
     pub server_key: String,
-    pub project_id: String,
+    pub sender_id: String,
+    pub fcm_url: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -111,8 +112,7 @@ impl AppConfig {
                 url: std::env::var("DATABASE_URL").map_err(|_| PeerPowerError::Configuration {
                     message: "DATABASE_URL is required".to_string(),
                 })?,
-                name: std::env::var("DATABASE_NAME")
-                    .unwrap_or_else(|_| "peerpower".to_string()),
+                name: std::env::var("DATABASE_NAME").unwrap_or_else(|_| "peerpower".to_string()),
                 max_connections: std::env::var("DATABASE_MAX_CONNECTIONS")
                     .unwrap_or_else(|_| "100".to_string())
                     .parse()
@@ -157,7 +157,9 @@ impl AppConfig {
             external: ExternalServicesConfig {
                 fcm: FcmConfig {
                     server_key: std::env::var("FCM_SERVER_KEY").unwrap_or_default(),
-                    project_id: std::env::var("FCM_PROJECT_ID").unwrap_or_default(),
+                    sender_id: std::env::var("FCM_SENDER_ID").unwrap_or_default(),
+                    fcm_url: std::env::var("FCM_URL")
+                        .unwrap_or_else(|_| "https://fcm.googleapis.com/fcm/send".to_string()),
                 },
                 baray: BarayConfig {
                     api_key: std::env::var("BARAY_API_KEY").unwrap_or_default(),
@@ -176,8 +178,7 @@ impl AppConfig {
             instance: InstanceConfig {
                 id: std::env::var("INSTANCE_ID")
                     .unwrap_or_else(|_| crate::shared::utils::generate_id()),
-                region: std::env::var("REGION")
-                    .unwrap_or_else(|_| "unknown".to_string()),
+                region: std::env::var("REGION").unwrap_or_else(|_| "unknown".to_string()),
                 zone: std::env::var("ZONE").ok(),
             },
         };

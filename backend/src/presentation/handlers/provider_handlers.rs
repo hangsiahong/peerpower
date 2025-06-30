@@ -256,7 +256,7 @@ pub async fn list_providers(
         })?
     {
         // Extract fields from the document
-        let provider_id = doc.get_str("provider_id").unwrap_or("").to_string();
+        let provider_id = doc.get_str("id").unwrap_or("").to_string();
         let user_id = doc.get_str("user_id").unwrap_or("").to_string();
         let phone = doc.get_str("phone").unwrap_or("").to_string();
         let carrier = doc.get_str("carrier").unwrap_or("Unknown").to_string();

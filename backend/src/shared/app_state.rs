@@ -5,6 +5,7 @@ use crate::domain::repositories::UserRepository;
 use crate::domain::services::AuthService;
 use crate::infrastructure::auth_service_impl::AuthServiceImpl;
 use crate::infrastructure::database::user_repository::MongoUserRepository;
+use crate::infrastructure::messaging::fcm_service::{FcmService, FcmServiceImpl};
 use crate::shared::Result;
 
 // Application state for dependency injection
@@ -15,6 +16,7 @@ pub struct AppState {
     pub redis: crate::infrastructure::database::RedisConnection,
     pub auth_service: Arc<dyn AuthService>,
     pub user_repository: Arc<dyn UserRepository>,
+    pub fcm_service: Arc<dyn FcmService>,
 }
 
 impl AppState {
@@ -39,12 +41,17 @@ impl AppState {
             user_repo.clone(),
         ));
 
+        // Create FCM service
+        let fcm_service: Arc<dyn FcmService> =
+            Arc::new(FcmServiceImpl::new(config.external.fcm.clone()));
+
         Ok(Self {
             config,
             database,
             redis,
             auth_service,
             user_repository: user_repo,
+            fcm_service,
         })
     }
 }
