@@ -259,33 +259,6 @@ fn init_tracing() {
         .init();
 }
 
-/// Placeholder handler for user profile (protected route)
-async fn user_profile_handler() -> Json<Value> {
-    // TODO: Implement user profile retrieval
-    Json(json!({
-        "message": "User profile endpoint - TODO: implement",
-        "status": "placeholder"
-    }))
-}
-
-/// Placeholder handler for provider registration (protected route)
-async fn provider_register_handler() -> Json<Value> {
-    // TODO: Implement provider registration
-    Json(json!({
-        "message": "Provider registration endpoint - TODO: implement",
-        "status": "placeholder"
-    }))
-}
-
-/// Placeholder handler for sending messages (protected route)
-async fn send_message_handler() -> Json<Value> {
-    // TODO: Implement message sending
-    Json(json!({
-        "message": "Send message endpoint - TODO: implement",
-        "status": "placeholder"
-    }))
-}
-
 /// Graceful shutdown signal handler
 async fn shutdown_signal() {
     let ctrl_c = async {

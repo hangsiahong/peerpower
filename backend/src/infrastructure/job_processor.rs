@@ -107,38 +107,67 @@ impl JobProcessor {
                 resource: format!("Message: {}", job.message_id),
             })?;
 
+        // Validate message is still deliverable
+        if !message.is_deliverable() {
+            info!("Message {} is not deliverable, skipping", message.id);
+            return Ok(());
+        }
+
+        // Check if message is expired
+        if message.is_expired() {
+            info!("Message {} is expired, marking as failed", message.id);
+            message.mark_failed("Message expired".to_string());
+            job.mark_failed("Message expired".to_string());
+            Self::update_message_and_job(app_state, &message, &job).await?;
+            return Ok(());
+        }
+
+        // Validate message content
+        if let Err(validation_error) = message.validate_content() {
+            info!(
+                "Message {} failed validation: {}",
+                message.id, validation_error
+            );
+            message.mark_failed(validation_error.clone());
+            job.mark_failed(validation_error);
+            Self::update_message_and_job(app_state, &message, &job).await?;
+            return Ok(());
+        }
+
         // Find an available provider
         match Self::find_available_provider(app_state, &message).await? {
-            Some(provider) => {
+            Some(mut provider) => {
                 info!("Assigned job {} to provider {}", job.id, provider.id);
 
-                // Update message and job status
-                message.provider_id = Some(provider.id.clone());
-                message.status = MessageStatus::Assigned;
-
-                job.provider_id = provider.id.clone();
-                job.mark_dispatched("fcm_message_id".to_string()); // TODO: Get actual FCM message ID
+                // Use entity methods to update state
+                message.assign_to_provider(provider.id.clone());
+                job.mark_in_progress();
+                provider.increment_load();
 
                 // Send FCM notification to provider
                 match Self::send_fcm_notification(app_state, &job, &message, &provider).await {
                     Ok(_) => {
                         info!("FCM notification sent for job {}", job.id);
-                        message.status = MessageStatus::Sent;
+                        message.mark_sent();
+                        provider.record_message_sent();
                     }
                     Err(e) => {
                         error!("Failed to send FCM notification: {}", e);
-                        message.status = MessageStatus::Failed;
+                        message.mark_failed(format!("FCM failed: {}", e));
                         job.mark_failed(format!("FCM failed: {}", e));
+                        provider.record_message_failed();
+                        provider.decrement_load();
 
                         // Re-queue for retry if possible
                         if job.can_retry() {
+                            job.increment_retry();
                             Self::requeue_job(app_state, &job).await?;
                         }
                     }
                 }
 
                 // Update database
-                Self::update_message_and_job(app_state, &message, &job).await?;
+                Self::update_message_job_and_provider(app_state, &message, &job, &provider).await?;
             }
             None => {
                 info!("No available provider for job {}, re-queuing", job.id);
@@ -176,15 +205,18 @@ impl JobProcessor {
                 message: format!("Failed to query providers: {}", e),
             })?;
 
-        // Try to get the first available provider
-        if let Some(provider) = cursor
-            .try_next()
-            .await
-            .map_err(|e| PeerPowerError::Database {
-                message: format!("Failed to fetch provider: {}", e),
-            })?
+        // Try to get the first available provider and validate availability
+        while let Some(provider) =
+            cursor
+                .try_next()
+                .await
+                .map_err(|e| PeerPowerError::Database {
+                    message: format!("Failed to fetch provider: {}", e),
+                })?
         {
-            return Ok(Some(provider));
+            if provider.is_available() && provider.is_heartbeat_recent() {
+                return Ok(Some(provider));
+            }
         }
 
         // If no same-carrier provider available, try any available provider
@@ -289,7 +321,45 @@ impl JobProcessor {
         Ok(())
     }
 
-    /// Update message and job in database
+    /// Update message, job, and provider in database
+    async fn update_message_job_and_provider(
+        app_state: &Arc<AppState>,
+        message: &Message,
+        job: &Job,
+        provider: &Provider,
+    ) -> Result<()> {
+        let messages_collection = app_state.database.collection::<Message>("messages");
+        let jobs_collection = app_state.database.collection::<Job>("jobs");
+        let providers_collection = app_state.database.collection::<Provider>("providers");
+
+        // Update message
+        messages_collection
+            .replace_one(mongodb::bson::doc! {"id": &message.id}, message, None)
+            .await
+            .map_err(|e| PeerPowerError::Database {
+                message: format!("Failed to update message: {}", e),
+            })?;
+
+        // Update job
+        jobs_collection
+            .replace_one(mongodb::bson::doc! {"id": &job.id}, job, None)
+            .await
+            .map_err(|e| PeerPowerError::Database {
+                message: format!("Failed to update job: {}", e),
+            })?;
+
+        // Update provider
+        providers_collection
+            .replace_one(mongodb::bson::doc! {"id": &provider.id}, provider, None)
+            .await
+            .map_err(|e| PeerPowerError::Database {
+                message: format!("Failed to update provider: {}", e),
+            })?;
+
+        Ok(())
+    }
+
+    /// Update message and job in database (without provider)
     async fn update_message_and_job(
         app_state: &Arc<AppState>,
         message: &Message,
