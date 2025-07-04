@@ -23,7 +23,8 @@ use tower_http::{
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::presentation::handlers::{
-    auth_handlers, message_handlers, provider_handlers, user_handlers,
+    admin_handlers, auth_handlers, earnings_handlers, message_handlers, provider_handlers,
+    user_handlers,
 };
 use crate::presentation::middleware::auth_middleware;
 
@@ -102,15 +103,47 @@ async fn build_app(config: AppConfig) -> Result<Router> {
         .route("/messages/send", post(message_handlers::send_message))
         .route("/messages/:id", get(message_handlers::get_message_status))
         .route("/messages", get(message_handlers::list_messages))
+        .route(
+            "/messages/:message_id/delivery",
+            post(message_handlers::confirm_delivery),
+        )
+        .route(
+            "/earnings/summary",
+            get(earnings_handlers::get_provider_earnings),
+        )
+        .route(
+            "/earnings/history",
+            get(earnings_handlers::get_earnings_history),
+        )
+        .route(
+            "/earnings/stats",
+            get(earnings_handlers::get_system_earnings_stats),
+        )
+        .route("/admin/stats", get(admin_handlers::get_system_stats))
+        .route(
+            "/admin/providers",
+            get(admin_handlers::get_provider_performance),
+        )
+        .route(
+            "/admin/messages",
+            get(admin_handlers::get_message_analytics),
+        )
         .layer(middleware::from_fn_with_state(
             app_state.clone(),
             auth_middleware::auth_middleware::<axum::body::Body>,
         ));
 
+    // Public webhook routes (no authentication required)
+    let webhook_routes = Router::new().route(
+        "/webhooks/delivery/:message_id",
+        post(message_handlers::delivery_webhook),
+    );
+
     // API v1 routes
     let api_v1 = Router::new()
         .nest("/auth", auth_routes)
-        .nest("/", protected_routes);
+        .nest("/", protected_routes)
+        .nest("/", webhook_routes);
 
     // Build the main router
     let app = Router::new()

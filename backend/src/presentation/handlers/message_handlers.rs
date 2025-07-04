@@ -82,6 +82,22 @@ pub struct MessageListQuery {
     pub status: Option<String>,
 }
 
+#[derive(Debug, Deserialize, Validate)]
+pub struct DeliveryConfirmationRequest {
+    pub status: String, // "delivered", "failed", "pending"
+    pub delivery_time: Option<String>, // ISO 8601 timestamp
+    pub error_message: Option<String>,
+    pub provider_message_id: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DeliveryConfirmationResponse {
+    pub message_id: String,
+    pub status: String,
+    pub updated_at: String,
+    pub provider_earnings: Option<f64>,
+}
+
 /// Submit SMS job for delivery
 pub async fn send_message(
     State(app_state): State<Arc<AppState>>,
@@ -227,7 +243,7 @@ pub async fn get_message_status(
     }))
 }
 
-/// List user's messages
+/// List user's messages with pagination
 pub async fn list_messages(
     State(app_state): State<Arc<AppState>>,
     Query(params): Query<MessageListQuery>,
@@ -235,7 +251,7 @@ pub async fn list_messages(
 ) -> Result<Json<Vec<MessageStatusResponse>>> {
     let page = params.page.unwrap_or(1).max(1);
     let limit = params.limit.unwrap_or(20).min(100).max(1);
-    let _skip = (page - 1) * limit; // TODO: implement pagination
+    let skip = (page - 1) * limit;
 
     // Build query filter
     let mut filter = mongodb::bson::doc! {"client_id": &user_id};
@@ -243,15 +259,20 @@ pub async fn list_messages(
         filter.insert("status", status);
     }
 
+    // Create find options with pagination and sorting
+    let mut find_options = mongodb::options::FindOptions::default();
+    find_options.skip = Some(skip as u64);
+    find_options.limit = Some(limit as i64);
+    find_options.sort = Some(mongodb::bson::doc! {"created_at": -1}); // Most recent first
+
     // Find messages with pagination
     let messages_collection = app_state.database.collection::<Message>("messages");
-    let mut cursor =
-        messages_collection
-            .find(filter, None)
-            .await
-            .map_err(|e| PeerPowerError::Database {
-                message: format!("Failed to fetch messages: {}", e),
-            })?;
+    let mut cursor = messages_collection
+        .find(filter, find_options)
+        .await
+        .map_err(|e| PeerPowerError::Database {
+            message: format!("Failed to fetch messages: {}", e),
+        })?;
 
     let mut messages = Vec::new();
     while let Ok(Some(message)) = cursor.try_next().await {
@@ -277,6 +298,213 @@ pub async fn list_messages(
     Ok(Json(messages))
 }
 
+/// Confirm message delivery (called by providers)
+pub async fn confirm_delivery(
+    State(app_state): State<Arc<AppState>>,
+    Path(message_id): Path<String>,
+    AuthenticatedUser(user_id): AuthenticatedUser,
+    JsonExtractor(delivery_request): JsonExtractor<DeliveryConfirmationRequest>,
+) -> Result<Json<DeliveryConfirmationResponse>> {
+    delivery_request.validate()?;
+
+    info!("Delivery confirmation for message {} from user {}", message_id, user_id);
+
+    // Find the message and verify the user is the assigned provider
+    let messages_collection = app_state.database.collection::<Message>("messages");
+    let mut message = messages_collection
+        .find_one(mongodb::bson::doc! {"id": &message_id}, None)
+        .await
+        .map_err(|e| PeerPowerError::Database {
+            message: format!("Failed to fetch message: {}", e),
+        })?
+        .ok_or_else(|| PeerPowerError::NotFound {
+            resource: format!("Message with ID: {}", message_id),
+        })?;
+
+    // Verify the user is the assigned provider for this message
+    let providers_collection = app_state.database.collection::<crate::domain::entities::Provider>("providers");
+    let provider = providers_collection
+        .find_one(mongodb::bson::doc! {"user_id": &user_id}, None)
+        .await
+        .map_err(|e| PeerPowerError::Database {
+            message: format!("Failed to fetch provider: {}", e),
+        })?
+        .ok_or_else(|| PeerPowerError::NotFound {
+            resource: format!("Provider for user: {}", user_id),
+        })?;
+
+    // Check if this provider is assigned to this message
+    if message.provider_id.as_ref() != Some(&provider.id) {
+        return Err(PeerPowerError::ValidationError {
+            field: "provider".to_string(),
+            message: "You are not assigned to this message".to_string(),
+        });
+    }
+
+    // Update message status based on delivery confirmation
+    let new_status = match delivery_request.status.as_str() {
+        "delivered" => crate::shared::types::MessageStatus::Delivered,
+        "failed" => crate::shared::types::MessageStatus::Failed,
+        "pending" => crate::shared::types::MessageStatus::Sent,
+        _ => return Err(PeerPowerError::ValidationError {
+            field: "status".to_string(),
+            message: "Invalid delivery status".to_string(),
+        }),
+    };
+
+    message.status = new_status;
+    message.updated_at = chrono::Utc::now();
+
+    // Update the message in database
+    messages_collection
+        .update_one(
+            mongodb::bson::doc! {"id": &message_id},
+            mongodb::bson::doc! {
+                "$set": {
+                    "status": format!("{:?}", message.status),
+                    "updated_at": message.updated_at
+                }
+            },
+            None,
+        )
+        .await
+        .map_err(|e| PeerPowerError::Database {
+            message: format!("Failed to update message: {}", e),
+        })?;
+
+    // Update the associated job
+    let jobs_collection = app_state.database.collection::<Job>("jobs");
+    let job_update = if delivery_request.status == "delivered" {
+        mongodb::bson::doc! {
+            "$set": {
+                "status": "completed",
+                "completed_at": chrono::Utc::now(),
+                "updated_at": chrono::Utc::now()
+            }
+        }
+    } else {
+        mongodb::bson::doc! {
+            "$set": {
+                "status": "failed",
+                "error_message": delivery_request.error_message.unwrap_or("Delivery failed".to_string()),
+                "updated_at": chrono::Utc::now()
+            }
+        }
+    };
+
+    jobs_collection
+        .update_one(
+            mongodb::bson::doc! {"message_id": &message_id},
+            job_update,
+            None,
+        )
+        .await
+        .map_err(|e| PeerPowerError::Database {
+            message: format!("Failed to update job: {}", e),
+        })?;
+
+    // Calculate provider earnings if delivered
+    let provider_earnings = if delivery_request.status == "delivered" {
+        Some(calculate_provider_earnings(&message.content, &message.priority))
+    } else {
+        None
+    };
+
+    // If delivered, update provider stats and earnings
+    if delivery_request.status == "delivered" {
+        let earnings = provider_earnings.unwrap_or(0.0);
+        providers_collection
+            .update_one(
+                mongodb::bson::doc! {"id": &provider.id},
+                mongodb::bson::doc! {
+                    "$inc": {
+                        "total_messages_delivered": 1,
+                        "earnings_total": earnings
+                    },
+                    "$set": {
+                        "updated_at": chrono::Utc::now()
+                    }
+                },
+                None,
+            )
+            .await
+            .map_err(|e| PeerPowerError::Database {
+                message: format!("Failed to update provider stats: {}", e),
+            })?;
+    }
+
+    info!("Message {} delivery confirmed with status: {}", message_id, delivery_request.status);
+
+    Ok(Json(DeliveryConfirmationResponse {
+        message_id: message.id,
+        status: format!("{:?}", message.status).to_lowercase(),
+        updated_at: message.updated_at.to_rfc3339(),
+        provider_earnings,
+    }))
+}
+
+/// Webhook endpoint for external delivery confirmations
+pub async fn delivery_webhook(
+    State(app_state): State<Arc<AppState>>,
+    Path(message_id): Path<String>,
+    JsonExtractor(delivery_request): JsonExtractor<DeliveryConfirmationRequest>,
+) -> Result<Json<serde_json::Value>> {
+    delivery_request.validate()?;
+
+    info!("Webhook delivery confirmation for message {}", message_id);
+
+    // Find the message
+    let messages_collection = app_state.database.collection::<Message>("messages");
+    let mut message = messages_collection
+        .find_one(mongodb::bson::doc! {"id": &message_id}, None)
+        .await
+        .map_err(|e| PeerPowerError::Database {
+            message: format!("Failed to fetch message: {}", e),
+        })?
+        .ok_or_else(|| PeerPowerError::NotFound {
+            resource: format!("Message with ID: {}", message_id),
+        })?;
+
+    // Update message status
+    let new_status = match delivery_request.status.as_str() {
+        "delivered" => crate::shared::types::MessageStatus::Delivered,
+        "failed" => crate::shared::types::MessageStatus::Failed,
+        "pending" => crate::shared::types::MessageStatus::Sent,
+        _ => return Err(PeerPowerError::ValidationError {
+            field: "status".to_string(),
+            message: "Invalid delivery status".to_string(),
+        }),
+    };
+
+    message.status = new_status;
+    message.updated_at = chrono::Utc::now();
+
+    // Update the message in database
+    messages_collection
+        .update_one(
+            mongodb::bson::doc! {"id": &message_id},
+            mongodb::bson::doc! {
+                "$set": {
+                    "status": format!("{:?}", message.status),
+                    "updated_at": message.updated_at
+                }
+            },
+            None,
+        )
+        .await
+        .map_err(|e| PeerPowerError::Database {
+            message: format!("Failed to update message: {}", e),
+        })?;
+
+    info!("Webhook processed successfully for message {}", message_id);
+
+    Ok(Json(serde_json::json!({
+        "status": "ok",
+        "message_id": message_id,
+        "timestamp": chrono::Utc::now().to_rfc3339()
+    })))
+}
+
 /// Calculate message cost based on content length and priority
 fn calculate_message_cost(content: &str, priority: &MessagePriority) -> f64 {
     let base_cost = 0.01; // Base cost in PPT tokens
@@ -290,4 +518,19 @@ fn calculate_message_cost(content: &str, priority: &MessagePriority) -> f64 {
     };
 
     base_cost * length_multiplier * priority_multiplier
+}
+
+/// Calculate provider earnings for a delivered message
+fn calculate_provider_earnings(content: &str, priority: &MessagePriority) -> f64 {
+    let base_earnings = 0.008; // 80% of base cost goes to provider
+    let length_multiplier = (content.len() as f64 / 160.0).ceil();
+
+    let priority_multiplier = match priority {
+        MessagePriority::Low => 0.8,
+        MessagePriority::Normal => 1.0,
+        MessagePriority::High => 1.5,
+        MessagePriority::Urgent => 2.0,
+    };
+
+    base_earnings * length_multiplier * priority_multiplier
 }
